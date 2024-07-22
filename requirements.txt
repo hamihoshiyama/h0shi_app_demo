@@ -1,7 +1,6 @@
 streamlit
 openai
 slack_sdk
-sckit-learn
 pandas
 python-dotenev
 requests
