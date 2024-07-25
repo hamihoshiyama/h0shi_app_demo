@@ -4,4 +4,3 @@ slack_sdk
 pandas
 python-dotenv
 requests
-time
