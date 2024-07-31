@@ -69,7 +69,6 @@ if not st.session_state.logged_in:
 
 
 else:
-    # 情報記述ページ
     st.header('Information Input')
     user_token = st.text_input("User OAuth Token", type="password")
     bot_token = st.text_input("Bot OAuth Token", type="password")
@@ -97,7 +96,7 @@ else:
         st.success("Fine-tuning started")
 
     if st.button('Start Fine-Tuning'):
-        logging.info("Starting fine-tuning...")
+        logging.info("ファインチューニング開始")
         headers = {'Authorization': f'Bearer {st.session_state.bot_token}'}
         client = WebClient(token=st.session_state.user_token)
 
@@ -120,7 +119,7 @@ else:
             except requests.exceptions.RequestException as e:
                 st.error(f"Error fetching user list: {e}")
             return None
-    
+
         user_names = [st.session_state.user_name_1, st.session_state.user_name_2, st.session_state.user_name_3]
         user_ids = [get_user_id(st.session_state.user_name_1), get_user_id(st.session_state.user_name_2), get_user_id(st.session_state.user_name_3)]
         my_id = get_user_id(st.session_state.my_user_name)
@@ -129,63 +128,64 @@ else:
         def fetch_all_messages(user_id):
             logging.info(f"Fetching all messages for user ID {user_id}...")
             try:
-                response=client.conversations_open(users=[user_id])
+                response = client.conversations_open(users=[user_id])
                 if response['ok']:
-                    channel_id=response['channel']['id']
-                    messages=[]
-                    has_more=True
-                    latest=datetime.now().timestamp()
-                    while has_more and len(messages)<500:
-                        response=client.conversations_history(channel=channel_id, latest=str(latest), limit=1000)
+                    channel_id = response['channel']['id']
+                    messages = []
+                    has_more = True
+                    latest = datetime.now().timestamp()
+                    while has_more and len(messages) < 500:
+                        response = client.conversations_history(channel=channel_id, latest=str(latest), limit=1000)
                         if response['ok']:
                             messages.extend(response['messages'])
-                            has_more=response['has_more']
+                            has_more = response['has_more']
                             if has_more:
-                                latest=response['messages'][-1]['ts']
+                                latest = response['messages'][-1]['ts']
                         else:
-                            has_more=False
-                    logging.info(f"Fetched{len(messages)} messages for user ID {user_id}.")
+                            has_more = False
+                    logging.info(f"Fetched {len(messages)} messages for user ID {user_id}.")
                     return messages[:500]
                 else:
                     return None
             except SlackApiError as e:
                 st.error(f"An error occurred: {e.response['error']}")
                 return None
-        
-        def format_messages_to_jsonl(messages, model_user_name, model_id, my_id, filename):
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, "w", encoding='utf-8') as f:
-                system_message = {"role": "system", "content": f"あなたは{model_user_name}です"}
-                user_message = None
-                assistant_message = None
-                for message in messages:
-                    text = message.get("text")
-                    content = re.sub(r'<@[^>]+>', '', text)#メッセージのテキストからメンションを取り除く(r''=生文字列、”[^>]+”=「＞以外の文字が一回以上続く部分」)
-                    user = message.get("user")
-                    if user == model_id:
-                        assistant_message = {"role": "assistant", "content": content}
-                    elif user == my_id:
-                        user_message = {"role": "user", "content": content}
-                    if user_message and assistant_message:
-                        combined_messages = [system_message, user_message, assistant_message]
-                        f.write(json.dumps({"messages": combined_messages}, ensure_ascii=False) + "\n")
-                        user_message = None
-                        assistant_message = None
-            logging.info(f"Messages formatted and saved to {filename}.")
 
-        save_dir="/Users/hami8/Desktop/h0shi_app_demo/training_files"
+        def format_messages_to_jsonl(messages, model_user_name, model_id, my_id, filename):
+            data = []
+            system_message = {"role": "system", "content": f"あなたは{model_user_name}です"}
+            user_message = None
+            assistant_message = None
+            for message in messages:
+                text = message.get("text")
+                content = re.sub(r'<@[^>]+>', '', text)
+                user = message.get("user")
+                if user == model_id:
+                    assistant_message = {"role": "assistant", "content": content}
+                elif user == my_id:
+                    user_message = {"role": "user", "content": content}
+                if user_message and assistant_message:
+                    combined_messages = [system_message, user_message, assistant_message]
+                    data.append({"messages": combined_messages})
+                    user_message = None
+                    assistant_message = None
+            return data
+        
+        training_files = {}
         for user_name, user_id in zip(user_names, user_ids):
-            messages=fetch_all_messages(user_id)
+            messages = fetch_all_messages(user_id)
             if messages:
-                filename = os.path.join(save_dir, f"training_data_{user_name}.jsonl")
-                format_messages_to_jsonl(messages, user_name, user_id, my_id, filename)
+                data = format_messages_to_jsonl(messages, user_name, user_id, my_id, None)
+                training_files[user_name] = data
             else:
                 st.error(f"No messages found for user {user_name}")
+        st.session_state.training_files = training_files
         st.session_state.data_prepared = True
         st.session_state.user_names = user_names
         st.session_state.user_ids = user_ids
         st.rerun()
-    
+
+        
     if st.session_state.data_prepared and not st.session_state.fine_tuning_started:
         def load_and_shuffle_data(file_path):
             if not os.path.isfile(file_path):
@@ -203,7 +203,7 @@ else:
             test_data = data[split_idx:]
             logging.info(f"Data split into {len(train_data)} training samples and {len(test_data)} test samples.")
             return train_data, test_data
-        
+
         def save_data_to_file(data, file_path):
             with open(file_path, 'w', encoding='utf-8') as f:
                 for item in data:
@@ -217,23 +217,11 @@ else:
             response = openai.fine_tuning.jobs.create(model="gpt-3.5-turbo", training_file=train_file.id, validation_file=validation_file.id, hyperparameters={"n_epochs": 3})
             logging.info(f"Fine-tuning started with job ID: {response.id}")
             return response.id
-        
-        def get_finetuned_model_name(finetuning_id, api_token):
-            openai.api_key = api_token
-            response = openai.fine_tuning.jobs.retrieve(finetuning_id)
-            return response.fine_tuned_model
-        
         finetuning_ids = []
-        user_names = st.session_state.user_names
-        save_dir = "/Users/hami8/Desktop/h0shi_app_demo/training_files"
-        for user_name in user_names:
-            file_path = os.path.join(save_dir, f"training_data_{user_name}.jsonl")
-            data = load_and_shuffle_data(file_path)
-            if data is None:
-                continue
+        for user_name, data in st.session_state.training_files.items():
             train_data, test_data = split_data(data)
-            train_file_path = os.path.join(save_dir, f"train_data_{user_name}.jsonl")
-            test_file_path = os.path.join(save_dir, f"test_data_{user_name}.jsonl")
+            train_file_path = f"/tmp/train_data_{user_name}.jsonl"
+            test_file_path = f"/tmp/test_data_{user_name}.jsonl"
             save_data_to_file(train_data, train_file_path)
             save_data_to_file(test_data, test_file_path)
             finetuning_id = fine_tune_model(train_file_path, test_file_path, openai.api_key)
@@ -258,11 +246,6 @@ else:
                 st.error(f"Error checking fine-tuning status: {e}")
                 return None
             
-        def get_finetuned_model_name(finetuning_id, api_token):
-            openai.api_key = api_token
-            response = openai.fine_tuning.jobs.retrieve(finetuning_id)
-            return response.fine_tuned_model
-        
         while True:
             all_succeeded = True
             for finetuning_id in st.session_state.finetuning_ids:
@@ -274,8 +257,10 @@ else:
             if all_succeeded:
                 model_names = []
                 for finetuning_id in st.session_state.finetuning_ids:
-                    model_name = get_finetuned_model_name(finetuning_id, openai.api_key)
+                    response = openai.fine_tuning.jobs.retrieve(finetuning_id)
+                    model_name = response.fine_tuned_model
                     model_names.append(model_name)
+                    save_model(st.session_state.username, model_name)
                 st.session_state.model_names = model_names
                 st.session_state.all_succeeded = True
                 st.success("Fine-tuning succeeded!")
@@ -290,26 +275,22 @@ else:
         if selected_user:
             user_index = st.session_state.user_names.index(selected_user)
             model_name = st.session_state.model_names[user_index]
-            
+
             # チャットページ
             st.header('Chat with Fine-Tuned Model')
 
             user_input = st.text_input("Enter your question:")
-            if st.button('Submit'):
-                openai.api_key = os.getenv("OPENAI_API_KEY")
-                response = openai.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": "あなたはアシスタントです"},
-                        {"role": "user", "content": user_input}
-                    ],
-                    max_tokens=150
-                )
-            
-                generated_response = response.choices[0].message.content.strip()
-                st.write(f"Response: {generated_response}")
-                
-        
+        if st.button('Submit'):
+            response = openai.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": f"あなたは{selected_user}です"},
+                    {"role": "user", "content": user_input}
+                ],
+                max_tokens=150
+            )
+            generated_response = response.choices[0].message.content.strip()
+            st.write(f"Response: {generated_response}")
 
 
 
