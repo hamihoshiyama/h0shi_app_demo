@@ -8,7 +8,6 @@ import streamlit as st
 import openai
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from dotenv import load_dotenv
 import re
 import pandas as pd
 import logging
@@ -17,8 +16,7 @@ logging.basicConfig(filename='app.log', level=logging.INFO, format='%(asctime)s:
 logging.getLogger().addHandler(logging.NullHandler())
 
 
-load_dotenv()
-openai.api_key = os.getenv("OPEN_API_KEY")
+
 
 users={
     "h0shi" : "hamihoshi1234",
@@ -211,7 +209,7 @@ else:
             logging.info(f"Data saved to {file_path}.")
 
         def fine_tune_model(train_data, test_data, api_token):
-            openai.api_key = api_token
+            openai.api_key = st.secrets["OPENAI_API_KEY"]
             train_file = openai.files.create(file=open(train_data, "rb"), purpose="fine-tune")
             validation_file = openai.files.create(file=open(test_data, "rb"), purpose="fine-tune")
             response = openai.fine_tuning.jobs.create(model="gpt-3.5-turbo", training_file=train_file.id, validation_file=validation_file.id, hyperparameters={"n_epochs": 3})
